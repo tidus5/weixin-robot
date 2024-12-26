@@ -1,12 +1,10 @@
 import { log } from 'wechaty'
 import type { Message, Room } from 'wechaty'
-import { sendContactImage, sendContactMsg, sendRoomImage, sendRoomMsg } from '../services/sendMessage.ts'
+import { sendContactMsg, sendRoomMsg } from '../services/sendMessage.ts'
 import { parseCommand } from '../services/actions.ts'
+//import { getAIData } from '../services/ai.ts'
 import { getAIData } from '../services/ai.ts'
-import { messageCount } from '../services/messageCount.ts'
 import { robotConfig } from '../configs/robot.ts'
-
-export const GroupStatistics = process.env.GROUP_STATISTICS ?? false
 
 const startTime = new Date()
 export async function onMessage(msg: Message) {
@@ -40,16 +38,12 @@ async function getMessagePayload(msg: Message, room?: Room) {
   if (msg.self()) {
     return
   }
-  if (room) {
-    dispatchRoomTextMsg(msg, room)
-  } else {
-    dispatchFriendTextMsg(msg)
-  }
-  // switch (msg.type()) {
-  //   case bot.Message.Type.Text: {
-  //     room ? dispatchRoomTextMsg(msg, room) : dispatchFriendTextMsg(msg)
-  //     break
-  //   }
+
+  switch (msg.type()) {
+    case bot.Message.Type.Text: {
+      room ? dispatchRoomTextMsg(msg, room) : dispatchFriendTextMsg(msg)
+      break
+    }
     // case bot.Message.Type.Attachment:
     // case bot.Message.Type.Audio: {
     //   room ? dispatchRoomAudioMsg(msg, room) : dispatchFriendAudioMsg(msg)
@@ -75,10 +69,10 @@ async function getMessagePayload(msg: Message, room?: Room) {
     //   room ? dispatchRoomMiniProgramMsg(msg, room) : dispatchFriendMiniProgramMsg(msg)
     //   break
     // }
-  // `  default:
-  //     // log.info('接收到莫名其妙的消息')
-  //     break
-  // }`
+    default:
+      // log.info('接收到莫名其妙的消息')
+      break
+  }
 }
 
 /**
@@ -88,44 +82,33 @@ async function getMessagePayload(msg: Message, room?: Room) {
  */
 async function dispatchRoomTextMsg(msg: Message, room: Room) {
   const topic = await room.topic()
-  const content = msg?.text()?.trim() ?? ''
+  const content = msg.text().trim()
   const contact = msg.talker()
   const alias = await contact.alias()
   const bot = msg.wechaty
   const name = alias ? `${contact.name()}(${alias})` : contact.name()
-
   log.info(`群【${topic}】【${name}】 发送了：${content}`)
-
-  // 记录群消息
-  if (GroupStatistics) {
-    messageCount(room.id, topic, contact.id, name)
-  }
   // const isMentionSelf = await msg.mentionSelf();
   // if (isMentionSelf) {
   //   return
   // }
   // 判断是否在群聊中被 @
   if (room && await msg.mentionSelf()) {
-    const response = await getAIData(content);
-    log.info(`根据命令【${content}】返回消息：${response}`);
-    await sendRoomMsg(bot, response, topic);
-    return;
+    const msg = await getAIData(content)
+    log.info(`根据命令【${content}】返回消息：${msg}`)
+    await sendRoomMsg(bot, msg, topic)
+    return
   }
-
-  if(topic == 'PY 交易群·理财' || topic == 'PY 交易群·Web3'  || topic == 'PY 交易群·丑谷'){
+  if(topic == 'PY 交易群·理财'){
     //log.info('PY 交易群·理财————test123')
     return
   }
-  const func = parseCommand(content, room.id);
+  const func = parseCommand(content)
   if (func) {
-    const response = await func;
-    if (response.endsWith('.png')) {
-      log.info(`根据命令【${content}】返回图片：${response}`);
-      await sendRoomImage(bot, response, topic);
-    } else {
-      log.info(`根据命令【${content}】返回消息：${response}`);
-      await sendRoomMsg(bot, response, topic);
-    }
+    const msg = await func
+    log.info(`根据命令【${content}】返回消息：${msg}`)
+    await sendRoomMsg(bot, msg, topic)
+    return
   }
 }
 
@@ -134,23 +117,23 @@ async function dispatchRoomTextMsg(msg: Message, room: Room) {
  * @param msg
  */
 async function dispatchFriendTextMsg(msg: Message) {
-  const bot = msg.wechaty;
-  const content = msg.text().trim();
-  const contact = msg.talker();
-  const alias = await contact.alias();
-  const name = alias ? `${contact.name()}(${alias})` : contact.name();
-  log.info(`好友【${name}】 发送了：${content}`);
+  const bot = msg.wechaty
+  const content = msg.text().trim()
+  const contact = msg.talker()
+  const alias = await contact.alias()
 
-  const func = parseCommand(content);
-  let response = func ? await func : await getAIData(content);
-
-  if (response.endsWith('.png')) {
-    log.info(`根据命令【${content}】返回图片：${response}`);
-    await sendContactImage(bot, response, alias, name);
-  } else {
-    log.info(`根据命令【${content}】返回消息：${response}`);
-    await sendContactMsg(bot, response, alias, name);
+  const name = alias ? `${contact.name()}(${alias})` : contact.name()
+  log.info(`好友【${name}】 发送了：${content}`)
+  const func = parseCommand(content)
+  if (func) {
+    const msg = await func
+    log.info(`根据命令【${content}】返回消息：${msg}`)
+    await sendContactMsg(bot, msg, alias, name)
+    return
   }
+  log.info(`根据命令【${content}】返回消息：${msg}`)
+  //await sendContactMsg(bot, await getAIData(content), alias, name)
+  return
 }
 
 
