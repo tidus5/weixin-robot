@@ -20,6 +20,12 @@ export async function onMessage(msg: Message) {
     // 群白名单，只接受白名单内的群消息
     if (!robotConfig.whiteRoomList.includes(topic))
        return
+    if (robotConfig.blackRoomList.includes(topic)){
+      const content = msg?.text()?.trim() ?? ''
+      if(!robotConfig.blackRoomOpeningContentList.includes(content)){
+        return
+      }
+    }
     // 群消息
     getMessagePayload(msg, room)
   }
@@ -112,9 +118,11 @@ async function dispatchRoomTextMsg(msg: Message, room: Room) {
     return;
   }
 
-  if(topic == 'PY 交易群·理财' || topic == 'PY 交易群·Web3'  || topic == 'PY 交易群·丑谷'){
-    //log.info('PY 交易群·理财————test123')
-    return
+  if(content != 'sx' && content != 'ss'){
+    if(topic == 'PY 交易群·理财' || topic == 'PY 交易群·Web3'  || topic == 'PY 交易群·丑谷'){
+      //log.info('PY 交易群·理财————test123')
+      return
+    }
   }
   const func = parseCommand(content, room.id);
   if (func) {
