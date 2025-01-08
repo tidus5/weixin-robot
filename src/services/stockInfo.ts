@@ -194,7 +194,7 @@ async function getMultipleStocksData(symbols: string[]): Promise<string[]> {
             if (quote.current_ext && quote.percent_ext && quote.current !== quote.current_ext && market.status_id !== 5) {
                 const preIsGrowing = quote.percent_ext > 0;
                 const preTrend = preIsGrowing ? '📈' : '📉';
-                text += `\n${market.status}：${quote.current_ext} ${preTrend}${preIsGrowing ? '+' : ''}${convertToNumber(quote.percent_ext)}%`;
+                text += `\n${market.status}：${quote.current_ext} （${preTrend}${preIsGrowing ? '+' : ''}${convertToNumber(quote.percent_ext)}%）`;
             }
             return text;
         } catch (error) {
@@ -214,13 +214,104 @@ export async function getStockData(symbol: string): Promise<string> {
     }
 }
 
+// 定义时间段权重映射
+const TIME_WEIGHTS = new Map<string, number>([
+    // 开盘前10分钟，按分钟记录权重（这些数值是根据每分钟的成交量增长率计算得出）
+    ['9:30', 8.48], // 87 -> 453 (增长最快)
+    ['9:31', 8.48], // 453 -> 691
+    ['9:32', 6.47], // 691 -> 872
+    ['9:33', 5.44], // 872 -> 1062
+    ['9:34', 4.97], // 1062 -> 1254
+    ['9:35', 6.69], // 1254 -> 1443
+    ['9:36', 4.50], // 1443 -> 1630
+    ['9:37', 4.36], // 1630 -> 1788
+    ['9:38', 4.18], // 1788 -> 1935
+    ['9:39', 4.02], // 1935 -> 2056
+    
+    // 后续按10分钟区间设置权重（基于每10分钟的平均增长率）
+    ['9:40-9:50', 3.85],  // 2056 -> 3180
+    ['9:50-10:00', 2.98], // 3180 -> 4108
+    ['10:00-10:10', 2.56], // 4108 -> 4755
+    ['10:10-10:20', 2.23], // 4755 -> 5257
+    ['10:20-10:30', 1.97], // 5257 -> 5826
+    ['10:30-10:40', 1.82], // 5826 -> 6268
+    ['10:40-10:50', 1.68], // 6268 -> 6567
+    ['10:50-11:00', 1.54], // 6567 -> 6812
+    ['11:00-11:10', 1.42], // 6812 -> 7046
+    ['11:10-11:20', 1.32], // 7046 -> 7267
+    ['11:20-11:30', 1.24], // 7267 -> 7534
+    ['13:00-13:10', 1.18], // 7534 -> 7910
+    ['13:10-13:20', 1.14], // 7910 -> 8247
+    ['13:20-13:30', 1.1], // 8247 -> 8544
+    ['13:30-13:40', 1.07], // 8544 -> 8852
+    ['13:40-13:50', 1.04], // 8852 -> 9162
+    ['13:50-14:00', 1.01], // 9162 -> 9645
+    ['14:00-14:10', 1.0], // 9645 -> 10123
+    ['14:10-14:20', 1.0], // 10123 -> 10661
+    ['14:20-14:30', 1.0], // 10661 -> 11102
+    ['14:30-14:40', 0.99], // 11102 -> 11549
+    ['14:40-14:50', 1.98], // 11549 -> 12066
+    ['14:50-15:00', 1.0], // 12066 -> 12821 (收盘前放量)
+]);
+
+function getTimeKey(hour: number, minute: number): string {
+    // 开盘前10分钟按分钟返回
+    if (hour === 9 && minute >= 30 && minute < 40) {
+        return `${hour}:${minute}`;
+    }
+    
+    // 其他时间按10分钟区间返回
+    const startMinute = Math.floor(minute / 10) * 10;
+    const endMinute = startMinute + 10;
+    return `${hour}:${startMinute}-${hour}:${endMinute}`;
+}
+
+function calculateTradingMinutes(now: Date): { minutes: number; weight: number } {
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    const currentMinutes = hour * 60 + minute;
+
+    // 如果在开盘前或收盘后，返回0
+    if (currentMinutes < 9 * 60 + 30 || currentMinutes > 15 * 60) 
+        return { minutes: 0, weight: 1 };
+
+    let tradingMinutes = 0;
+    
+    // 获取当前时间段的权重
+    const timeKey = getTimeKey(hour, minute);
+    const weight = TIME_WEIGHTS.get(timeKey) || 1.0;
+
+    // 计算交易分钟数
+    if (currentMinutes <= 11 * 60 + 30) {
+        tradingMinutes = Math.max(0, currentMinutes - (9 * 60 + 30));
+    } else if (currentMinutes >= 13 * 60) {
+        tradingMinutes = 120 + Math.min(120, currentMinutes - 13 * 60);
+    } else {
+        tradingMinutes = 120;
+    }
+
+    return { minutes: tradingMinutes, weight };
+}
+
 export async function getMarketIndexData() {
     try {
-        // 并行获取上证和深证指数数据
         const [shData, szData] = await Promise.all([
             getStockBasicData('SH000001'),
             getStockBasicData('SZ399001')
         ]);
+
+        const now = new Date();
+        const { minutes: tradingMinutes, weight } = calculateTradingMinutes(now);
+        const totalMinutesPerDay = 4 * 60; // 4小时交易时间
+        
+        // 计算当前两市成交额
+        const currentAmount = shData.quote.amount + szData.quote.amount;
+        
+        // 如果已收盘或未开盘，直接显示实际成交额，否则显示预估值
+        const estimatedAmount = tradingMinutes === 0 
+            ? currentAmount 
+            : (currentAmount / (tradingMinutes * weight)) * totalMinutesPerDay;
+
         // 处理上证指数数据
         const shQuote = shData.quote;
         const shIsGrowing = shQuote.percent > 0;
@@ -231,17 +322,14 @@ export async function getMarketIndexData() {
         const szIsGrowing = szQuote.percent > 0;
         const szTrend = szIsGrowing ? '📈' : '📉';
 
-        let text = `${shQuote?.name}(${shQuote?.symbol})\n`;
-        text += `现价：${shQuote.current} ${shTrend}${shIsGrowing ? '+' : ''}${convertToNumber(shQuote.percent)}%\n`;
-        text += `振幅：${convertToNumber(shQuote.amplitude)}%\n`;
-        text += `成交额：${formatAmount(shQuote.amount)}\n`;
-        text += `年初至今：${shQuote.current_year_percent > 0 ? '+' : ''}${convertToNumber(shQuote.current_year_percent)}%\n\n`;
+        let text = `${shQuote?.name}(${shQuote?.symbol}) `;
+        text += `现价：${shQuote.current} ${shTrend}(${shIsGrowing ? '+' : ''}${convertToNumber(shQuote.percent)}%)\n`;
+        text += `两市成交额：${formatAmount(currentAmount)}`;
+        // 只在交易时段显示预估值
+        if (tradingMinutes > 0) {
+            text += `\n预估全天：${formatAmount(estimatedAmount)}`;
+        }
 
-        text += `${szQuote?.name}(${szQuote?.symbol})\n`;
-        text += `现价：${szQuote.current} ${szTrend}${szIsGrowing ? '+' : ''}${convertToNumber(szQuote.percent)}%\n`;
-        text += `振幅：${convertToNumber(szQuote.amplitude)}%\n`;
-        text += `成交额：${formatAmount(szQuote.amount)}\n`;
-        text += `年初至今：${szQuote.current_year_percent > 0 ? '+' : ''}${convertToNumber(szQuote.current_year_percent)}%`;
         return text;
     } catch (error) {
         return `获取市场指数失败：${error.message}`;
